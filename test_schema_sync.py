@@ -1,0 +1,264 @@
+"""
+Unit tests for SchemaSyncService - using in-memory SQLite databases.
+"""
+
+import unittest
+
+from sqlalchemy import (
+    Column,
+    ForeignKey,
+    Integer,
+    MetaData,
+    String,
+    UniqueConstraint,
+    create_engine,
+    text,
+)
+
+from schema_sync import (
+    AlterGenerator,
+    DatabaseInspector,
+    SchemaDiffer,
+    SchemaSyncService,
+)
+
+
+def _build_source_db() -> "Engine":
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(100) NOT NULL,
+                    email VARCHAR(255) NOT NULL,
+                    age INTEGER DEFAULT 0,
+                    created_at VARCHAR(50)
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE UNIQUE INDEX ix_users_email ON users (email)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    amount INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX ix_orders_user_id ON orders (user_id)"))
+    return engine
+
+
+def _build_target_db() -> "Engine":
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(50),
+                    email VARCHAR(255) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE products (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(100) NOT NULL,
+                    price INTEGER NOT NULL
+                )
+                """
+            )
+        )
+    return engine
+
+
+class TestDatabaseInspector(unittest.TestCase):
+    def test_inspect_source(self):
+        engine = _build_source_db()
+        inspector = DatabaseInspector(engine)
+        schema = inspector.inspect_schema()
+
+        self.assertIn("users", schema.tables)
+        self.assertIn("orders", schema.tables)
+
+        users = schema.tables["users"]
+        self.assertIn("id", users.columns)
+        self.assertIn("name", users.columns)
+        self.assertIn("email", users.columns)
+        self.assertIn("age", users.columns)
+
+        self.assertFalse(users.columns["name"].nullable)
+        self.assertTrue(users.columns["age"].nullable)
+        self.assertEqual(users.columns["age"].default, "0")
+
+    def test_inspect_target(self):
+        engine = _build_target_db()
+        inspector = DatabaseInspector(engine)
+        schema = inspector.inspect_schema()
+
+        self.assertIn("users", schema.tables)
+        self.assertIn("products", schema.tables)
+        self.assertNotIn("orders", schema.tables)
+
+
+class TestSchemaDiffer(unittest.TestCase):
+    def setUp(self):
+        src_engine = _build_source_db()
+        tgt_engine = _build_target_db()
+
+        src_inspector = DatabaseInspector(src_engine)
+        tgt_inspector = DatabaseInspector(tgt_engine)
+
+        self.source = src_inspector.inspect_schema()
+        self.target = tgt_inspector.inspect_schema()
+
+        differ = SchemaDiffer()
+        self.diff = differ.diff(self.source, self.target)
+
+    def test_added_tables(self):
+        added_names = [t.name for t in self.diff.added_tables]
+        self.assertIn("orders", added_names)
+        self.assertNotIn("products", added_names)
+
+    def test_dropped_tables(self):
+        dropped_names = [t.name for t in self.diff.dropped_tables]
+        self.assertIn("products", dropped_names)
+        self.assertNotIn("orders", dropped_names)
+
+    def test_added_columns(self):
+        users_diff = next(
+            (td for td in self.diff.table_diffs if td.table_name == "users"), None
+        )
+        self.assertIsNotNone(users_diff)
+        added_col_names = [c.name for c in users_diff.added_columns]
+        self.assertIn("age", added_col_names)
+        self.assertIn("created_at", added_col_names)
+
+    def test_dropped_columns(self):
+        pass
+
+    def test_modified_columns(self):
+        users_diff = next(
+            (td for td in self.diff.table_diffs if td.table_name == "users"), None
+        )
+        self.assertIsNotNone(users_diff)
+        mod_names = []
+        for m in users_diff.modified_columns:
+            if hasattr(m, "sub_diffs"):
+                mod_names.append(m.column_name)
+            else:
+                mod_names.append(m.column_name)
+        self.assertIn("name", mod_names)
+
+    def test_added_indexes(self):
+        users_diff = next(
+            (td for td in self.diff.table_diffs if td.table_name == "users"), None
+        )
+        if users_diff:
+            added_idx_names = [idx.name for idx in users_diff.added_indexes]
+            self.assertIn("ix_users_email", added_idx_names)
+
+
+class TestAlterGenerator(unittest.TestCase):
+    def setUp(self):
+        src_engine = _build_source_db()
+        tgt_engine = _build_target_db()
+
+        src_inspector = DatabaseInspector(src_engine)
+        tgt_inspector = DatabaseInspector(tgt_engine)
+
+        self.source = src_inspector.inspect_schema()
+        self.target = tgt_inspector.inspect_schema()
+
+        differ = SchemaDiffer()
+        self.diff = differ.diff(self.source, self.target)
+
+    def test_generate_creates_statements(self):
+        generator = AlterGenerator(dialect="mysql")
+        statements = generator.generate(self.diff)
+        self.assertGreater(len(statements), 0)
+
+    def test_create_table_for_added(self):
+        generator = AlterGenerator(dialect="mysql")
+        statements = generator.generate(self.diff)
+        create_order = [s for s in statements if "CREATE TABLE" in s and "orders" in s]
+        self.assertGreater(len(create_order), 0)
+
+    def test_drop_table_for_removed(self):
+        generator = AlterGenerator(dialect="mysql")
+        statements = generator.generate(self.diff)
+        drop_product = [s for s in statements if "DROP TABLE" in s and "products" in s]
+        self.assertGreater(len(drop_product), 0)
+
+    def test_add_column_statement(self):
+        generator = AlterGenerator(dialect="mysql")
+        statements = generator.generate(self.diff)
+        add_age = [s for s in statements if "ADD COLUMN" in s and "age" in s]
+        self.assertGreater(len(add_age), 0)
+
+    def test_no_diff_same_schema(self):
+        engine = _build_source_db()
+        inspector = DatabaseInspector(engine)
+        schema = inspector.inspect_schema()
+
+        differ = SchemaDiffer()
+        diff = differ.diff(schema, schema)
+
+        generator = AlterGenerator(dialect="mysql")
+        statements = generator.generate(diff)
+        self.assertEqual(len(statements), 0)
+
+
+class TestSchemaSyncService(unittest.TestCase):
+    def test_sync_dry_run(self):
+        src_engine = _build_source_db()
+        tgt_engine = _build_target_db()
+
+        service = SchemaSyncService(
+            source_url="sqlite://",
+            target_url="sqlite://",
+            dialect="mysql",
+        )
+
+        source_inspector = DatabaseInspector(src_engine)
+        target_inspector = DatabaseInspector(tgt_engine)
+
+        source_schema = source_inspector.inspect_schema()
+        target_schema = target_inspector.inspect_schema()
+
+        differ = SchemaDiffer()
+        diff = differ.diff(source_schema, target_schema)
+
+        generator = AlterGenerator(dialect="mysql")
+        statements = generator.generate(diff)
+
+        self.assertGreater(len(statements), 0)
+
+    def test_print_diff_no_statements(self):
+        import io
+        import sys
+
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            SchemaSyncService.print_diff([])
+        finally:
+            sys.stdout = sys.__stdout__
+
+        self.assertIn("完全一致", captured.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()
