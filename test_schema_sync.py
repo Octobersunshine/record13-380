@@ -4,16 +4,7 @@ Unit tests for SchemaSyncService - using in-memory SQLite databases.
 
 import unittest
 
-from sqlalchemy import (
-    Column,
-    ForeignKey,
-    Integer,
-    MetaData,
-    String,
-    UniqueConstraint,
-    create_engine,
-    text,
-)
+from sqlalchemy import create_engine, text
 
 from schema_sync import (
     AlterGenerator,
@@ -81,6 +72,74 @@ def _build_target_db() -> "Engine":
                 """
             )
         )
+    return engine
+
+
+def _build_same_columns_different_order_db() -> "Engine":
+    """构建列顺序不同但列名和类型完全相同的数据库，用于验证顺序不影响对比结果"""
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at VARCHAR(50),
+                    age INTEGER DEFAULT 0,
+                    email VARCHAR(255) NOT NULL,
+                    name VARCHAR(100) NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE UNIQUE INDEX ix_users_email ON users (email)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    amount INTEGER NOT NULL DEFAULT 0,
+                    user_id INTEGER NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX ix_orders_user_id ON orders (user_id)"))
+    return engine
+
+
+def _build_same_type_different_nullable_default_db() -> "Engine":
+    """构建列名和类型相同但 nullable/default 不同的数据库，验证这些差异被忽略"""
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name VARCHAR(100),
+                    email VARCHAR(255),
+                    age INTEGER,
+                    created_at VARCHAR(50) DEFAULT 'now'
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE UNIQUE INDEX ix_users_email ON users (email)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    amount INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users (id)
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX ix_orders_user_id ON orders (user_id)"))
     return engine
 
 
@@ -154,12 +213,7 @@ class TestSchemaDiffer(unittest.TestCase):
             (td for td in self.diff.table_diffs if td.table_name == "users"), None
         )
         self.assertIsNotNone(users_diff)
-        mod_names = []
-        for m in users_diff.modified_columns:
-            if hasattr(m, "sub_diffs"):
-                mod_names.append(m.column_name)
-            else:
-                mod_names.append(m.column_name)
+        mod_names = [m.column_name for m in users_diff.modified_columns]
         self.assertIn("name", mod_names)
 
     def test_added_indexes(self):
@@ -169,6 +223,41 @@ class TestSchemaDiffer(unittest.TestCase):
         if users_diff:
             added_idx_names = [idx.name for idx in users_diff.added_indexes]
             self.assertIn("ix_users_email", added_idx_names)
+
+    def test_column_order_does_not_matter(self):
+        """字段顺序不同，但列名和类型完全相同时，不应产生任何差异"""
+        src_engine = _build_source_db()
+        tgt_engine = _build_same_columns_different_order_db()
+
+        src_schema = DatabaseInspector(src_engine).inspect_schema()
+        tgt_schema = DatabaseInspector(tgt_engine).inspect_schema()
+
+        diff = SchemaDiffer().diff(src_schema, tgt_schema)
+
+        self.assertEqual(len(diff.added_tables), 0)
+        self.assertEqual(len(diff.dropped_tables), 0)
+        self.assertEqual(len(diff.table_diffs), 0)
+
+    def test_nullable_and_default_ignored(self):
+        """列名和类型相同，但 nullable/default 不同时，不应产生列修改差异"""
+        src_engine = _build_source_db()
+        tgt_engine = _build_same_type_different_nullable_default_db()
+
+        src_schema = DatabaseInspector(src_engine).inspect_schema()
+        tgt_schema = DatabaseInspector(tgt_engine).inspect_schema()
+
+        diff = SchemaDiffer().diff(src_schema, tgt_schema)
+
+        self.assertEqual(len(diff.added_tables), 0)
+        self.assertEqual(len(diff.dropped_tables), 0)
+
+        users_diff = next(
+            (td for td in diff.table_diffs if td.table_name == "users"), None
+        )
+        if users_diff:
+            self.assertEqual(len(users_diff.modified_columns), 0)
+            self.assertEqual(len(users_diff.added_columns), 0)
+            self.assertEqual(len(users_diff.dropped_columns), 0)
 
 
 class TestAlterGenerator(unittest.TestCase):
@@ -218,6 +307,18 @@ class TestAlterGenerator(unittest.TestCase):
 
         generator = AlterGenerator(dialect="mysql")
         statements = generator.generate(diff)
+        self.assertEqual(len(statements), 0)
+
+    def test_no_statements_when_only_order_differs(self):
+        """列顺序不同时，不应生成任何 ALTER 语句"""
+        src_engine = _build_source_db()
+        tgt_engine = _build_same_columns_different_order_db()
+
+        src_schema = DatabaseInspector(src_engine).inspect_schema()
+        tgt_schema = DatabaseInspector(tgt_engine).inspect_schema()
+
+        diff = SchemaDiffer().diff(src_schema, tgt_schema)
+        statements = AlterGenerator(dialect="mysql").generate(diff)
         self.assertEqual(len(statements), 0)
 
 

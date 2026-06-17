@@ -295,7 +295,7 @@ class SchemaDiffer:
         for idx_name in source_idx & target_idx:
             s_idx = source.indexes[idx_name]
             t_idx = target.indexes[idx_name]
-            if s_idx.columns != t_idx.columns or s_idx.unique != t_idx.unique:
+            if set(s_idx.columns) != set(t_idx.columns) or s_idx.unique != t_idx.unique:
                 td.dropped_indexes.append(t_idx)
                 td.added_indexes.append(s_idx)
 
@@ -311,7 +311,7 @@ class SchemaDiffer:
         for uc_name in source_uc & target_uc:
             s_uc = source.unique_constraints[uc_name]
             t_uc = target.unique_constraints[uc_name]
-            if s_uc.columns != t_uc.columns:
+            if set(s_uc.columns) != set(t_uc.columns):
                 td.dropped_unique_constraints.append(t_uc)
                 td.added_unique_constraints.append(s_uc)
 
@@ -328,14 +328,14 @@ class SchemaDiffer:
             s_fk = source.foreign_keys[fk_name]
             t_fk = target.foreign_keys[fk_name]
             if (
-                s_fk.constrained_columns != t_fk.constrained_columns
+                set(s_fk.constrained_columns) != set(t_fk.constrained_columns)
                 or s_fk.referred_table != t_fk.referred_table
-                or s_fk.referred_columns != t_fk.referred_columns
+                or set(s_fk.referred_columns) != set(t_fk.referred_columns)
             ):
                 td.dropped_foreign_keys.append(t_fk)
                 td.added_foreign_keys.append(s_fk)
 
-        if source.primary_key_columns != target.primary_key_columns:
+        if set(source.primary_key_columns) != set(target.primary_key_columns):
             td.pk_changed = True
             td.source_pk = source.primary_key_columns
             td.target_pk = target.primary_key_columns
@@ -349,51 +349,14 @@ class SchemaDiffer:
         source: ColumnInfo,
         target: ColumnInfo,
     ) -> Optional[ColumnDiff]:
-        changes = []
-
         if source.type_ != target.type_:
-            changes.append(
-                ColumnDiff(
-                    table_name=table_name,
-                    column_name=col_name,
-                    change_type="type",
-                    source_value=source.type_,
-                    target_value=target.type_,
-                )
-            )
-
-        if source.nullable != target.nullable:
-            changes.append(
-                ColumnDiff(
-                    table_name=table_name,
-                    column_name=col_name,
-                    change_type="nullable",
-                    source_value=source.nullable,
-                    target_value=target.nullable,
-                )
-            )
-
-        if source.default != target.default:
-            changes.append(
-                ColumnDiff(
-                    table_name=table_name,
-                    column_name=col_name,
-                    change_type="default",
-                    source_value=source.default,
-                    target_value=target.default,
-                )
-            )
-
-        if len(changes) == 1:
-            return changes[0]
-        if len(changes) > 1:
-            cd = ColumnDiff(
+            return ColumnDiff(
                 table_name=table_name,
                 column_name=col_name,
-                change_type="compound",
+                change_type="type",
+                source_value=source.type_,
+                target_value=target.type_,
             )
-            cd.sub_diffs = changes
-            return cd
         return None
 
 
@@ -558,39 +521,12 @@ class AlterGenerator:
                 f"CREATE {unique}INDEX {self._quote(idx.name)} ON {tbl} ({idx_cols});"
             )
 
-    def _generate_column_alter(self, table_name: str, mod: Any) -> None:
+    def _generate_column_alter(self, table_name: str, mod: ColumnDiff) -> None:
         tbl = self._quote(table_name)
-        col = self._quote(
-            mod.column_name if hasattr(mod, "column_name") else ""
+        col = self._quote(mod.column_name)
+        self.statements.append(
+            f"ALTER TABLE {tbl} MODIFY COLUMN {col} {mod.source_value};"
         )
-
-        if hasattr(mod, "sub_diffs"):
-            for sub in mod.sub_diffs:
-                self._generate_column_alter(table_name, sub)
-            return
-
-        if mod.change_type == "type":
-            self.statements.append(
-                f"ALTER TABLE {tbl} MODIFY COLUMN {col} {mod.source_value};"
-            )
-        elif mod.change_type == "nullable":
-            if mod.source_value:
-                self.statements.append(
-                    f"ALTER TABLE {tbl} MODIFY COLUMN {col} NULL;"
-                )
-            else:
-                self.statements.append(
-                    f"ALTER TABLE {tbl} MODIFY COLUMN {col} NOT NULL;"
-                )
-        elif mod.change_type == "default":
-            if mod.source_value is not None:
-                self.statements.append(
-                    f"ALTER TABLE {tbl} ALTER COLUMN {col} SET DEFAULT {mod.source_value};"
-                )
-            else:
-                self.statements.append(
-                    f"ALTER TABLE {tbl} ALTER COLUMN {col} DROP DEFAULT;"
-                )
 
 
 class SchemaSyncService:
