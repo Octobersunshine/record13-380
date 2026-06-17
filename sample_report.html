@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据库表结构差异报告</title>
+<style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        background: #f5f7fa;
+        color: #333;
+        padding: 24px;
+        line-height: 1.6;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 28px 32px;
+        border-radius: 12px;
+        margin-bottom: 24px;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+    header h1 { font-size: 24px; margin-bottom: 8px; }
+    header p { opacity: 0.9; font-size: 14px; }
+    .stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    .stat-card {
+        background: white;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    .stat-card .number { font-size: 32px; font-weight: 700; }
+    .stat-card .label { font-size: 13px; color: #666; margin-top: 4px; }
+    .stat-card.add .number { color: #10b981; }
+    .stat-card.drop .number { color: #ef4444; }
+    .stat-card.modify .number { color: #f59e0b; }
+    .stat-card.total .number { color: #6366f1; }
+    .section {
+        background: white;
+        border-radius: 10px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        overflow: hidden;
+    }
+    .section-header {
+        padding: 16px 20px;
+        font-weight: 600;
+        font-size: 16px;
+        border-bottom: 1px solid #e5e7eb;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .section-header .badge {
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 500;
+        color: white;
+    }
+    .badge.add { background: #10b981; }
+    .badge.drop { background: #ef4444; }
+    .badge.modify { background: #f59e0b; }
+    .table-item {
+        padding: 16px 20px;
+        border-bottom: 1px solid #f3f4f6;
+    }
+    .table-item:last-child { border-bottom: none; }
+    .table-name {
+        font-weight: 600;
+        font-size: 15px;
+        color: #1f2937;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .table-name .icon { font-size: 18px; }
+    .diff-list { list-style: none; }
+    .diff-list li {
+        padding: 8px 12px;
+        margin-bottom: 4px;
+        border-radius: 6px;
+        font-family: "JetBrains Mono", Consolas, Monaco, monospace;
+        font-size: 13px;
+    }
+    .diff-list .add { background: #ecfdf5; color: #047857; }
+    .diff-list .drop { background: #fef2f2; color: #b91c1c; }
+    .diff-list .modify { background: #fffbeb; color: #b45309; }
+    .diff-list .change-type {
+        display: inline-block;
+        min-width: 60px;
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        margin-right: 8px;
+    }
+    details > summary {
+        cursor: pointer;
+        list-style: none;
+    }
+    details > summary::-webkit-details-marker { display: none; }
+    details[open] .summary-arrow { transform: rotate(90deg); }
+    .summary-arrow {
+        display: inline-block;
+        transition: transform 0.2s;
+        margin-right: 6px;
+    }
+    .sql-block {
+        background: #1e293b;
+        color: #e2e8f0;
+        padding: 16px;
+        border-radius: 8px;
+        font-family: "JetBrains Mono", Consolas, Monaco, monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+    .no-diff {
+        text-align: center;
+        padding: 60px 20px;
+        color: #6b7280;
+    }
+    .no-diff .icon { font-size: 48px; margin-bottom: 12px; }
+    .footer {
+        text-align: center;
+        padding: 20px;
+        color: #9ca3af;
+        font-size: 12px;
+    }
+    </style>
+</head>
+<body>
+<div class="container">
+<header>
+  <h1>📊 数据库表结构差异报告</h1>
+  <p>dev_db (source) → prod_db (target)</p>
+</header>
+
+<div class="stats">
+  <div class="stat-card add">
+    <div class="number">1</div>
+    <div class="label">新增表</div>
+  </div>
+  <div class="stat-card drop">
+    <div class="number">1</div>
+    <div class="label">删除表</div>
+  </div>
+  <div class="stat-card modify">
+    <div class="number">1</div>
+    <div class="label">修改表</div>
+  </div>
+  <div class="stat-card total">
+    <div class="number">3</div>
+    <div class="label">总计差异</div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-header">
+    <span class="badge add">+ 1</span>
+    新增的表
+  </div>
+  <div class="table-item"><div class="table-name"><span class="icon">➕</span>orders</div><ul class="diff-list"><li class="add"><span class="change-type">ADD</span>id INTEGER</li>
+<li class="add"><span class="change-type">ADD</span>user_id INTEGER</li>
+<li class="add"><span class="change-type">ADD</span>amount INTEGER</li></ul></div>
+</div>
+
+<div class="section">
+  <div class="section-header">
+    <span class="badge drop">- 1</span>
+    删除的表
+  </div>
+  <div class="table-item"><div class="table-name"><span class="icon">➖</span>products</div><ul class="diff-list"><li class="drop"><span class="change-type">DROP</span>id INTEGER</li>
+<li class="drop"><span class="change-type">DROP</span>name VARCHAR(100)</li>
+<li class="drop"><span class="change-type">DROP</span>price INTEGER</li></ul></div>
+</div>
+
+<div class="section">
+  <div class="section-header">
+    <span class="badge modify">~ 1</span>
+    修改的表
+  </div>
+  <div class="table-item"><div class="table-name"><span class="icon">✏️</span>users</div><ul class="diff-list"><li class="add"><span class="change-type">ADD</span>列 age INTEGER</li>
+<li class="add"><span class="change-type">ADD</span>列 created_at VARCHAR(50)</li>
+<li class="modify"><span class="change-type">MODIFY</span>列 name: VARCHAR(50) → VARCHAR(100)</li>
+<li class="add"><span class="change-type">ADD</span>索引 ix_users_email (email) [唯一]</li></ul></div>
+</div>
+
+<div class="footer">
+  Generated by Schema Sync Service
+</div>
+</div>
+</body>
+</html>

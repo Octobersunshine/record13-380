@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, text
 from schema_sync import (
     AlterGenerator,
     DatabaseInspector,
+    HtmlReportGenerator,
     SchemaDiffer,
     SchemaSyncService,
 )
@@ -359,6 +360,123 @@ class TestSchemaSyncService(unittest.TestCase):
             sys.stdout = sys.__stdout__
 
         self.assertIn("完全一致", captured.getvalue())
+
+
+class TestHtmlReportGenerator(unittest.TestCase):
+    def setUp(self):
+        src_engine = _build_source_db()
+        tgt_engine = _build_target_db()
+
+        src_inspector = DatabaseInspector(src_engine)
+        tgt_inspector = DatabaseInspector(tgt_engine)
+
+        self.source = src_inspector.inspect_schema()
+        self.target = tgt_inspector.inspect_schema()
+
+        differ = SchemaDiffer()
+        self.diff = differ.diff(self.source, self.target)
+
+    def test_generate_html_returns_string(self):
+        generator = HtmlReportGenerator()
+        html = generator.generate(self.diff)
+        self.assertIsInstance(html, str)
+        self.assertGreater(len(html), 0)
+
+    def test_html_contains_doctype(self):
+        generator = HtmlReportGenerator()
+        html = generator.generate(self.diff)
+        self.assertIn("<!DOCTYPE html>", html)
+
+    def test_html_contains_title(self):
+        generator = HtmlReportGenerator()
+        html = generator.generate(self.diff)
+        self.assertIn("数据库表结构差异报告", html)
+
+    def test_html_contains_added_tables(self):
+        generator = HtmlReportGenerator()
+        html = generator.generate(self.diff)
+        self.assertIn("新增的表", html)
+        self.assertIn("orders", html)
+
+    def test_html_contains_dropped_tables(self):
+        generator = HtmlReportGenerator()
+        html = generator.generate(self.diff)
+        self.assertIn("删除的表", html)
+        self.assertIn("products", html)
+
+    def test_html_contains_modified_tables(self):
+        generator = HtmlReportGenerator()
+        html = generator.generate(self.diff)
+        self.assertIn("修改的表", html)
+        self.assertIn("users", html)
+
+    def test_html_no_diff_scenario(self):
+        """没有差异时，应显示『完全一致』的提示"""
+        src_engine = _build_source_db()
+        schema = DatabaseInspector(src_engine).inspect_schema()
+        diff = SchemaDiffer().diff(schema, schema)
+
+        generator = HtmlReportGenerator()
+        html = generator.generate(diff)
+        self.assertIn("完全一致", html)
+
+    def test_html_order_different_no_diff(self):
+        """列顺序不同时，HTML 报告也应显示无差异"""
+        src_engine = _build_source_db()
+        tgt_engine = _build_same_columns_different_order_db()
+
+        src_schema = DatabaseInspector(src_engine).inspect_schema()
+        tgt_schema = DatabaseInspector(tgt_engine).inspect_schema()
+        diff = SchemaDiffer().diff(src_schema, tgt_schema)
+
+        generator = HtmlReportGenerator()
+        html = generator.generate(diff)
+        self.assertIn("完全一致", html)
+
+    def test_save_to_file(self):
+        import os
+        import tempfile
+
+        generator = HtmlReportGenerator()
+        with tempfile.NamedTemporaryFile(
+            suffix=".html", delete=False, mode="w"
+        ) as f:
+            tmp_path = f.name
+
+        try:
+            generator.save(self.diff, tmp_path)
+            self.assertTrue(os.path.exists(tmp_path))
+            with open(tmp_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("<!DOCTYPE html>", content)
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    def test_html_escapes_special_characters(self):
+        """验证特殊字符被正确转义"""
+        src_engine = _build_source_db()
+        src_schema = DatabaseInspector(src_engine).inspect_schema()
+
+        tgt_engine = create_engine("sqlite:///:memory:")
+        with tgt_engine.begin() as conn:
+            conn.execute(
+                text(
+                    'CREATE TABLE "test<>&table" ('
+                    "id INTEGER PRIMARY KEY, "
+                    '"col<>&name" VARCHAR(100)'
+                    ")"
+                )
+            )
+        tgt_schema = DatabaseInspector(tgt_engine).inspect_schema()
+
+        diff = SchemaDiffer().diff(src_schema, tgt_schema)
+        generator = HtmlReportGenerator()
+        html = generator.generate(diff)
+
+        self.assertIn("&lt;", html)
+        self.assertIn("&gt;", html)
+        self.assertIn("&amp;", html)
 
 
 if __name__ == "__main__":

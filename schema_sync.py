@@ -529,6 +529,359 @@ class AlterGenerator:
         )
 
 
+class HtmlReportGenerator:
+    _CSS = """
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        background: #f5f7fa;
+        color: #333;
+        padding: 24px;
+        line-height: 1.6;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 28px 32px;
+        border-radius: 12px;
+        margin-bottom: 24px;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+    header h1 { font-size: 24px; margin-bottom: 8px; }
+    header p { opacity: 0.9; font-size: 14px; }
+    .stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    .stat-card {
+        background: white;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    .stat-card .number { font-size: 32px; font-weight: 700; }
+    .stat-card .label { font-size: 13px; color: #666; margin-top: 4px; }
+    .stat-card.add .number { color: #10b981; }
+    .stat-card.drop .number { color: #ef4444; }
+    .stat-card.modify .number { color: #f59e0b; }
+    .stat-card.total .number { color: #6366f1; }
+    .section {
+        background: white;
+        border-radius: 10px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        overflow: hidden;
+    }
+    .section-header {
+        padding: 16px 20px;
+        font-weight: 600;
+        font-size: 16px;
+        border-bottom: 1px solid #e5e7eb;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .section-header .badge {
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 500;
+        color: white;
+    }
+    .badge.add { background: #10b981; }
+    .badge.drop { background: #ef4444; }
+    .badge.modify { background: #f59e0b; }
+    .table-item {
+        padding: 16px 20px;
+        border-bottom: 1px solid #f3f4f6;
+    }
+    .table-item:last-child { border-bottom: none; }
+    .table-name {
+        font-weight: 600;
+        font-size: 15px;
+        color: #1f2937;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .table-name .icon { font-size: 18px; }
+    .diff-list { list-style: none; }
+    .diff-list li {
+        padding: 8px 12px;
+        margin-bottom: 4px;
+        border-radius: 6px;
+        font-family: "JetBrains Mono", Consolas, Monaco, monospace;
+        font-size: 13px;
+    }
+    .diff-list .add { background: #ecfdf5; color: #047857; }
+    .diff-list .drop { background: #fef2f2; color: #b91c1c; }
+    .diff-list .modify { background: #fffbeb; color: #b45309; }
+    .diff-list .change-type {
+        display: inline-block;
+        min-width: 60px;
+        font-weight: 600;
+        font-size: 11px;
+        text-transform: uppercase;
+        margin-right: 8px;
+    }
+    details > summary {
+        cursor: pointer;
+        list-style: none;
+    }
+    details > summary::-webkit-details-marker { display: none; }
+    details[open] .summary-arrow { transform: rotate(90deg); }
+    .summary-arrow {
+        display: inline-block;
+        transition: transform 0.2s;
+        margin-right: 6px;
+    }
+    .sql-block {
+        background: #1e293b;
+        color: #e2e8f0;
+        padding: 16px;
+        border-radius: 8px;
+        font-family: "JetBrains Mono", Consolas, Monaco, monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+    .no-diff {
+        text-align: center;
+        padding: 60px 20px;
+        color: #6b7280;
+    }
+    .no-diff .icon { font-size: 48px; margin-bottom: 12px; }
+    .footer {
+        text-align: center;
+        padding: 20px;
+        color: #9ca3af;
+        font-size: 12px;
+    }
+    """
+
+    def __init__(self, source_name: str = "源数据库", target_name: str = "目标数据库"):
+        self.source_name = source_name
+        self.target_name = target_name
+
+    def generate(self, diff: SchemaDiff) -> str:
+        parts: List[str] = []
+        parts.append(self._html_header())
+        parts.append(self._html_summary(diff))
+
+        has_diff = bool(
+            diff.added_tables or diff.dropped_tables or diff.table_diffs
+        )
+
+        if not has_diff:
+            parts.append(self._html_no_diff())
+        else:
+            if diff.added_tables:
+                parts.append(self._html_added_tables(diff.added_tables))
+            if diff.dropped_tables:
+                parts.append(self._html_dropped_tables(diff.dropped_tables))
+            if diff.table_diffs:
+                parts.append(self._html_modified_tables(diff.table_diffs))
+
+        parts.append(self._html_footer())
+        return "\n".join(parts)
+
+    def save(self, diff: SchemaDiff, output_path: str) -> None:
+        html = self.generate(diff)
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(html)
+
+    def _escape(self, text: str) -> str:
+        return (
+            str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+
+    def _html_header(self) -> str:
+        return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据库表结构差异报告</title>
+<style>{self._CSS}</style>
+</head>
+<body>
+<div class="container">
+<header>
+  <h1>📊 数据库表结构差异报告</h1>
+  <p>{self._escape(self.source_name)} → {self._escape(self.target_name)}</p>
+</header>"""
+
+    def _html_summary(self, diff: SchemaDiff) -> str:
+        added = len(diff.added_tables)
+        dropped = len(diff.dropped_tables)
+        modified = len(diff.table_diffs)
+        total = added + dropped + modified
+        return f"""
+<div class="stats">
+  <div class="stat-card add">
+    <div class="number">{added}</div>
+    <div class="label">新增表</div>
+  </div>
+  <div class="stat-card drop">
+    <div class="number">{dropped}</div>
+    <div class="label">删除表</div>
+  </div>
+  <div class="stat-card modify">
+    <div class="number">{modified}</div>
+    <div class="label">修改表</div>
+  </div>
+  <div class="stat-card total">
+    <div class="number">{total}</div>
+    <div class="label">总计差异</div>
+  </div>
+</div>"""
+
+    def _html_no_diff(self) -> str:
+        return """
+<div class="section">
+  <div class="no-diff">
+    <div class="icon">✅</div>
+    <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">两个数据库的表结构完全一致</div>
+    <div>未检测到任何差异，无需同步。</div>
+  </div>
+</div>"""
+
+    def _html_added_tables(self, tables: List[TableSchema]) -> str:
+        items = []
+        for t in tables:
+            col_items = []
+            for col in t.columns.values():
+                col_items.append(
+                    f'<li class="add"><span class="change-type">ADD</span>'
+                    f'{self._escape(col.name)} {self._escape(col.type_)}</li>'
+                )
+            cols_html = "\n".join(col_items)
+            items.append(
+                f'<div class="table-item">'
+                f'<div class="table-name"><span class="icon">➕</span>{self._escape(t.name)}</div>'
+                f'<ul class="diff-list">{cols_html}</ul>'
+                f"</div>"
+            )
+        body = "\n".join(items)
+        return f"""
+<div class="section">
+  <div class="section-header">
+    <span class="badge add">+ {len(tables)}</span>
+    新增的表
+  </div>
+  {body}
+</div>"""
+
+    def _html_dropped_tables(self, tables: List[TableSchema]) -> str:
+        items = []
+        for t in tables:
+            col_items = []
+            for col in t.columns.values():
+                col_items.append(
+                    f'<li class="drop"><span class="change-type">DROP</span>'
+                    f'{self._escape(col.name)} {self._escape(col.type_)}</li>'
+                )
+            cols_html = "\n".join(col_items)
+            items.append(
+                f'<div class="table-item">'
+                f'<div class="table-name"><span class="icon">➖</span>{self._escape(t.name)}</div>'
+                f'<ul class="diff-list">{cols_html}</ul>'
+                f"</div>"
+            )
+        body = "\n".join(items)
+        return f"""
+<div class="section">
+  <div class="section-header">
+    <span class="badge drop">- {len(tables)}</span>
+    删除的表
+  </div>
+  {body}
+</div>"""
+
+    def _html_modified_tables(self, table_diffs: List[TableDiff]) -> str:
+        items = []
+        for td in table_diffs:
+            items.append(self._html_modified_table(td))
+        body = "\n".join(items)
+        return f"""
+<div class="section">
+  <div class="section-header">
+    <span class="badge modify">~ {len(table_diffs)}</span>
+    修改的表
+  </div>
+  {body}
+</div>"""
+
+    def _html_modified_table(self, td: TableDiff) -> str:
+        diff_items: List[str] = []
+
+        for col in td.added_columns:
+            diff_items.append(
+                f'<li class="add"><span class="change-type">ADD</span>'
+                f'列 {self._escape(col.name)} {self._escape(col.type_)}</li>'
+            )
+
+        for col in td.dropped_columns:
+            diff_items.append(
+                f'<li class="drop"><span class="change-type">DROP</span>'
+                f'列 {self._escape(col.name)} {self._escape(col.type_)}</li>'
+            )
+
+        for mod in td.modified_columns:
+            diff_items.append(
+                f'<li class="modify"><span class="change-type">MODIFY</span>'
+                f'列 {self._escape(mod.column_name)}: '
+                f'{self._escape(mod.target_value)} → {self._escape(mod.source_value)}</li>'
+            )
+
+        for idx in td.added_indexes:
+            diff_items.append(
+                f'<li class="add"><span class="change-type">ADD</span>'
+                f'索引 {self._escape(idx.name)} ({", ".join(idx.columns)})'
+                f'{" [唯一]" if idx.unique else ""}</li>'
+            )
+
+        for idx in td.dropped_indexes:
+            diff_items.append(
+                f'<li class="drop"><span class="change-type">DROP</span>'
+                f'索引 {self._escape(idx.name)} ({", ".join(idx.columns)})'
+                f'{" [唯一]" if idx.unique else ""}</li>'
+            )
+
+        if td.pk_changed:
+            diff_items.append(
+                f'<li class="modify"><span class="change-type">PK</span>'
+                f'主键变更: {", ".join(td.target_pk)} → {", ".join(td.source_pk)}</li>'
+            )
+
+        diffs_html = "\n".join(diff_items)
+        return (
+            f'<div class="table-item">'
+            f'<div class="table-name"><span class="icon">✏️</span>{self._escape(td.table_name)}</div>'
+            f'<ul class="diff-list">{diffs_html}</ul>'
+            f"</div>"
+        )
+
+    def _html_footer(self) -> str:
+        return """
+<div class="footer">
+  Generated by Schema Sync Service
+</div>
+</div>
+</body>
+</html>"""
+
+
 class SchemaSyncService:
     def __init__(self, source_url: str, target_url: str, dialect: str = "mysql"):
         self.source_url = source_url
@@ -560,6 +913,28 @@ class SchemaSyncService:
         target_engine.dispose()
 
         return statements
+
+    def generate_report(self, output_path: str) -> None:
+        source_engine = create_engine(self.source_url)
+        target_engine = create_engine(self.target_url)
+
+        source_inspector = DatabaseInspector(source_engine)
+        target_inspector = DatabaseInspector(target_engine)
+
+        source_schema = source_inspector.inspect_schema()
+        target_schema = target_inspector.inspect_schema()
+
+        differ = SchemaDiffer()
+        diff = differ.diff(source_schema, target_schema)
+
+        report_gen = HtmlReportGenerator(
+            source_name=self.source_url,
+            target_name=self.target_url,
+        )
+        report_gen.save(diff, output_path)
+
+        source_engine.dispose()
+        target_engine.dispose()
 
     @staticmethod
     def print_diff(statements: List[str]) -> None:
@@ -599,6 +974,13 @@ def main():
         action="store_true",
         help="是否直接在目标数据库上执行生成的 ALTER 语句",
     )
+    parser.add_argument(
+        "--report",
+        type=str,
+        default=None,
+        metavar="OUTPUT_PATH",
+        help="导出 HTML 差异报告到指定文件路径 (如: report.html)",
+    )
 
     args = parser.parse_args()
 
@@ -610,6 +992,10 @@ def main():
 
     statements = service.sync(execute=args.execute)
     SchemaSyncService.print_diff(statements)
+
+    if args.report:
+        service.generate_report(args.report)
+        print(f"📄 HTML 差异报告已导出到: {args.report}")
 
 
 if __name__ == "__main__":
